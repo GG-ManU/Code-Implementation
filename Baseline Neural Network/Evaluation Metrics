@@ -1,0 +1,24 @@
+# Evaluate the baseline model
+score = baseline_model.evaluate(x_test, y_test, verbose=0)
+
+print('Test loss:', score[0])
+print('Test accuracy:', score[1])
+
+# Make predictions with the baseline model
+y_pred = baseline_model.predict(x_test)
+y_pred_classes = y_pred.argmax(axis=1)
+y_test_classes = y_test.argmax(axis=1)
+
+# Calculate metrics
+baseline_acc = accuracy_score(y_test_classes, y_pred_classes)
+f1 = f1_score(y_test_classes, y_pred_classes, average='weighted')
+logloss = log_loss(y_test, y_pred)
+
+# Calculate AUC-ROC
+# For multi-class, we'll use one-vs-rest approach
+auc_roc = roc_auc_score(y_test, y_pred, multi_class='ovr', average='weighted')
+
+print("Baseline model accuracy: {:.1%}".format(baseline_acc))
+print("F1-Score: {:.4f}".format(f1))
+print("Log Loss: {:.4f}".format(logloss))
+print("AUC-ROC: {:.4f}".format(auc_roc))
