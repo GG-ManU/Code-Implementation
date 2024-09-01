@@ -1,0 +1,128 @@
+from __future__ import print_function
+import keras
+from keras.datasets import mnist
+from keras.models import Model
+from keras.layers import Input, Dense, Dropout, Flatten, Conv2D, MaxPooling2D
+from keras import backend as K
+from keras.callbacks import EarlyStopping
+
+import numpy as np
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+import tqdm
+
+plt.style.use("ggplot")
+
+batch_size = 128
+num_classes = 10
+epochs = 12
+
+# input image dimensions
+img_rows, img_cols = 28, 28
+
+# the data, split between train and test sets
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+if K.image_data_format() == 'channels_first':
+    x_train = x_train.reshape(x_train.shape[0], 1, img_rows, img_cols)
+    x_test = x_test.reshape(x_test.shape[0], 1, img_rows, img_cols)
+    input_shape = (1, img_rows, img_cols)
+else:
+    x_train = x_train.reshape(x_train.shape[0], img_rows, img_cols, 1)
+    x_test = x_test.reshape(x_test.shape[0], img_rows, img_cols, 1)
+    input_shape = (img_rows, img_cols, 1)
+
+x_train = x_train.astype('float32') / 255
+x_test = x_test.astype('float32') / 255
+print('x_train shape:', x_train.shape)
+print(x_train.shape[0], 'train samples')
+print(x_test.shape[0], 'test samples')
+
+# convert class vectors to binary class matrices
+y_train = keras.utils.to_categorical(y_train, num_classes)
+y_test = keras.utils.to_categorical(y_test, num_classes)
+
+def get_dropout(input_tensor, p=0.5, mc=False):
+    if mc:
+        # Ensure dropout is active during MC
+        return Dropout(p)(input_tensor, training=True)
+    else:
+        return Dropout(p)(input_tensor)
+
+def get_model(mc=False, act="relu"):
+    inp = Input(input_shape)
+    x = Conv2D(32, kernel_size=(3, 3), activation=act)(inp)
+    x = Conv2D(64, kernel_size=(3, 3), activation=act)(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = get_dropout(x, p=0.25, mc=mc)
+    x = Flatten()(x)
+    x = Dense(128, activation=act)(x)
+    x = get_dropout(x, p=0.5, mc=mc)
+    out = Dense(num_classes, activation='softmax')(x)
+
+    model = Model(inputs=inp, outputs=out)
+
+    # Change optimizer from Adadelta to Adam
+    model.compile(loss=keras.losses.categorical_crossentropy,
+                  optimizer=keras.optimizers.Adam(),  # Changed to Adam optimizer
+                  metrics=['accuracy'])
+    return model
+
+# Create the models
+model = get_model(mc=False, act="relu")
+mc_model = get_model(mc=True, act="relu")
+
+# Define EarlyStopping callback
+early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+
+# Train the standard model
+h = model.fit(x_train, y_train,
+              batch_size=batch_size,
+              epochs=epochs,
+              verbose=1,
+              validation_data=(x_test, y_test))
+
+# Evaluate the normal model
+score = model.evaluate(x_test, y_test, verbose=0)
+
+print('Test loss:', score[0])
+print('Test accuracy:', score[1])
+
+# Train the MC dropout model with EarlyStopping
+h_mc = mc_model.fit(x_train, y_train,
+                    batch_size=batch_size,
+                    epochs=epochs,
+                    verbose=1,
+                    validation_data=(x_test, y_test),
+                    callbacks=[early_stopping])  # Adding the EarlyStopping callback
+
+# Monte Carlo predictions with dropout active
+mc_predictions = []
+
+for i in tqdm.tqdm(range(500)):
+    y_p = mc_model(x_test, training=True)  # Ensure dropout is active
+    mc_predictions.append(y_p)
+
+mc_predictions = np.array(mc_predictions)  # Convert list to array for easier manipulation
+
+# Calculate individual MC accuracies
+accs = []
+for y_p in mc_predictions:
+    acc = accuracy_score(y_test.argmax(axis=1), y_p.argmax(axis=1))
+    accs.append(acc)
+print("MC accuracy: {:.1%}".format(sum(accs) / len(accs)))
+
+# Calculate MC ensemble accuracy
+mc_ensemble_pred = mc_predictions.mean(axis=0).argmax(axis=1)
+ensemble_acc = accuracy_score(y_test.argmax(axis=1), mc_ensemble_pred)
+print("MC-ensemble accuracy: {:.1%}".format(ensemble_acc))
+
+# Debugging: Check some of the individual predictions
+print("Individual MC Accuracies:", accs[:10])  # Print the first 10 accuracies to check variability
+
+# Debugging: Check mean of a few predictions
+print("MC Ensemble Predictions Mean:", mc_predictions[:5].mean(axis=0)[:10])  # Print mean of first 5 predictions
+
+# Debugging: Check shape of predictions
+print("Shape of MC Predictions:", mc_predictions.shape)
+
