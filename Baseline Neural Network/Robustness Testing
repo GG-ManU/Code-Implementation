@@ -1,0 +1,113 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import log_loss, accuracy_score
+
+def add_gaussian_noise(X, std=0.1):
+    return np.clip(X + np.random.normal(0, std, X.shape), 0, 1)
+
+def add_salt_and_pepper_noise(X, amount=0.1):
+    X_noisy = X.copy()
+    n_salt = np.ceil(amount * X.size * 0.5).astype(int)
+    n_pepper = np.ceil(amount * X.size * 0.5).astype(int)
+    
+    # Salt noise
+    coords = tuple([np.random.randint(0, i, n_salt) for i in X.shape])
+    X_noisy[coords] = 1
+
+    # Pepper noise
+    coords = tuple([np.random.randint(0, i, n_pepper) for i in X.shape])
+    X_noisy[coords] = 0
+    
+    return X_noisy
+
+def random_erasing(X, probability=0.5, sl=0.02, sh=0.4, r1=0.3, r2=1/0.3):
+    X_erased = X.copy()
+    for i in range(X_erased.shape[0]):
+        if np.random.rand() > probability:
+            continue
+        
+        area = X_erased.shape[1] * X_erased.shape[2]
+        target_area = np.random.uniform(sl, sh) * area
+        aspect_ratio = np.random.uniform(r1, r2)
+        
+        h = int(round(np.sqrt(target_area * aspect_ratio)))
+        w = int(round(np.sqrt(target_area / aspect_ratio)))
+        
+        if w < X_erased.shape[2] and h < X_erased.shape[1]:
+            x1 = np.random.randint(0, X_erased.shape[1] - h)
+            y1 = np.random.randint(0, X_erased.shape[2] - w)
+            if X_erased.shape[-1] == 1:  # Grayscale image
+                X_erased[i, x1:x1+h, y1:y1+w, 0] = np.random.rand()
+            else:  # RGB image
+                X_erased[i, x1:x1+h, y1:y1+w, :] = np.random.rand(3)
+    
+    return X_erased
+
+def assess_model_robustness(model, X, y, perturbation_func, **kwargs):
+    X_perturbed = perturbation_func(X, **kwargs)
+    y_pred = model.predict(X_perturbed)
+    loss = log_loss(y, y_pred)
+    accuracy = accuracy_score(y.argmax(axis=1), y_pred.argmax(axis=1))
+    return loss, accuracy
+
+def run_robustness_tests(model, X, y):
+    print("Running anomaly robustness tests...")
+    
+    levels = np.linspace(0, 0.5, 11)  # 11 levels from 0 to 0.5
+    
+    results = {
+        'gaussian': {'log_loss': [], 'accuracy': []},
+        'salt_and_pepper': {'log_loss': [], 'accuracy': []},
+        'random_erasing': {'log_loss': [], 'accuracy': []}
+    }
+    
+    for level in levels:
+        print(f"\nTesting noise level: {level:.2f}")
+        
+        # Gaussian noise
+        loss, acc = assess_model_robustness(model, X, y, add_gaussian_noise, std=level)
+        results['gaussian']['log_loss'].append(loss)
+        results['gaussian']['accuracy'].append(acc)
+        print(f"Gaussian noise - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
+        
+        # Salt and pepper noise
+        loss, acc = assess_model_robustness(model, X, y, add_salt_and_pepper_noise, amount=level)
+        results['salt_and_pepper']['log_loss'].append(loss)
+        results['salt_and_pepper']['accuracy'].append(acc)
+        print(f"Salt and pepper noise - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
+        
+        # Random erasing
+        loss, acc = assess_model_robustness(model, X, y, random_erasing, probability=level)
+        results['random_erasing']['log_loss'].append(loss)
+        results['random_erasing']['accuracy'].append(acc)
+        print(f"Random erasing - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
+    
+    return results, levels
+
+def plot_robustness_results(results, levels):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    for noise_type in results:
+        ax1.plot(levels, results[noise_type]['log_loss'], label=noise_type)
+        ax2.plot(levels, results[noise_type]['accuracy'], label=noise_type)
+    
+    ax1.set_xlabel('Noise Level')
+    ax1.set_ylabel('Log-Loss')
+    ax1.set_title('Model Log-Loss vs Noise Level')
+    ax1.legend()
+    ax1.grid(True)
+    
+    ax2.set_xlabel('Noise Level')
+    ax2.set_ylabel('Accuracy')
+    ax2.set_title('Model Accuracy vs Noise Level')
+    ax2.legend()
+    ax2.grid(True)
+    
+    plt.tight_layout()
+    plt.show()
+
+# Run the robustness tests
+results, levels = run_robustness_tests(baseline_model, x_test, y_test)
+
+# Plot the results
+plot_robustness_results(results, levels)
