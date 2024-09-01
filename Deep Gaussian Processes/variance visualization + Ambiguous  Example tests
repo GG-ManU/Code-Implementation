@@ -1,0 +1,63 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+import gpflow
+from gpflow.kernels import RBF
+from gpflow.likelihoods import MultiClass
+from gpflow.models.svgp import SVGP
+from scipy.cluster.vq import kmeans2
+from PIL import Image
+
+
+# Assuming you have the prediction variances from your model
+def plot_variance_density(m, X_test):
+    # Predict the variance for the test set
+    _, v = m.predict_y(X_test)
+    
+    n_classes = v.shape[1]
+    
+    # Set up the subplots grid (2 rows, 5 columns for 10 classes)
+    fig, axes = plt.subplots(2, 5, figsize=(15, 10))
+    axes = axes.flatten()
+
+    # Loop over each class and plot the density of the variances
+    for i in range(n_classes):
+        sns.kdeplot(v[:, i], ax=axes[i], shade=True, color='blue')
+        axes[i].set_title(f'Class {i} Variance')
+        axes[i].set_xlabel('Variance')
+        axes[i].set_ylabel('Density')
+
+    plt.tight_layout()
+    plt.show()
+
+# Assuming you have already run your model and you have the test data `Xs`
+plot_variance_density(m_dgp2, Xs)
+
+
+# Load the image and preprocess it (crop out legend and grid, resize to 28x28)
+def load_and_preprocess_image(image_path):
+    img = Image.open(image_path).convert('L')  # Convert to grayscale
+    img = img.crop((left, upper, right, lower))  # Crop based on manual inspection of the grid
+    img = img.resize((28, 28))  # Resize to 28x28 pixels
+    img_array = np.array(img).astype('float32') / 255.0  # Normalize to [0, 1]
+    img_array = img_array.reshape(1, 28 * 28)  # Flatten for model input
+    return img_array
+
+# Load and preprocess your custom image
+image_path = 'path_to_your_cropped_image.png'  # Ensure this is the path to the correct cropped image
+img_array = load_and_preprocess_image(image_path)
+
+# Predict with the SVGP model using the preprocessed image
+mean, variance = m_sgp.predict_y(img_array)
+
+# Display the image again after cropping
+plt.imshow(img_array.reshape(28, 28), cmap='viridis')
+plt.title("Cropped Custom MNIST Image")
+plt.colorbar()
+plt.show()
+
+# Print the class probabilities and variances for the custom image
+print("Class Probabilities and Variances for Custom Image:")
+for i, (prob, var) in enumerate(zip(mean.flatten(), variance.flatten())):
+    print(f"Class: {i}; Probability: {prob:.2%}; Variance: {var:.2%}")
