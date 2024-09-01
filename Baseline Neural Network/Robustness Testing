@@ -1,113 +1,103 @@
 import numpy as np
+from scipy.stats import bernoulli
+from keras.losses import categorical_crossentropy
+from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
-from sklearn.metrics import log_loss, accuracy_score
 
-def add_gaussian_noise(X, std=0.1):
-    return np.clip(X + np.random.normal(0, std, X.shape), 0, 1)
+def add_gaussian_noise(images, noise_factor):
+    noisy_images = images + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=images.shape)
+    return np.clip(noisy_images, 0., 1.)
 
-def add_salt_and_pepper_noise(X, amount=0.1):
-    X_noisy = X.copy()
-    n_salt = np.ceil(amount * X.size * 0.5).astype(int)
-    n_pepper = np.ceil(amount * X.size * 0.5).astype(int)
+def add_salt_and_pepper_noise(images, noise_factor):
+    salt_vs_pepper = 0.5
+    noisy_images = np.copy(images)
+    random_mask = np.random.rand(*images.shape) < noise_factor
+    salt_mask = np.random.rand(*images.shape) < salt_vs_pepper
+    noisy_images[random_mask & salt_mask] = 1.0
+    noisy_images[random_mask & ~salt_mask] = 0.0
+    return noisy_images
+
+def random_erasing(images, p, s_l=0.02, s_h=0.4, r_1=0.3, r_2=1/0.3):
+    noisy_images = np.copy(images)
+    for i in range(images.shape[0]):
+        if np.random.rand() < p:
+            img = noisy_images[i]
+            h, w, c = img.shape
+            S = h * w
+            S_e = np.random.uniform(s_l, s_h) * S
+            r_e = np.random.uniform(r_1, r_2)
+            H_e = int(np.sqrt(S_e * r_e))
+            W_e = int(np.sqrt(S_e / r_e))
+            x = np.random.randint(0, w)
+            y = np.random.randint(0, h)
+            if x + W_e > w:
+                W_e = w - x
+            if y + H_e > h:
+                H_e = h - y
+            img[y:y+H_e, x:x+W_e, :] = np.random.rand()
+    return noisy_images
+
+def evaluate_model(model, x_test, y_test, noise_type, noise_levels):
+    accuracies = []
+    log_losses = []
     
-    # Salt noise
-    coords = tuple([np.random.randint(0, i, n_salt) for i in X.shape])
-    X_noisy[coords] = 1
-
-    # Pepper noise
-    coords = tuple([np.random.randint(0, i, n_pepper) for i in X.shape])
-    X_noisy[coords] = 0
-    
-    return X_noisy
-
-def random_erasing(X, probability=0.5, sl=0.02, sh=0.4, r1=0.3, r2=1/0.3):
-    X_erased = X.copy()
-    for i in range(X_erased.shape[0]):
-        if np.random.rand() > probability:
-            continue
+    for noise_level in noise_levels:
+        if noise_type == 'gaussian':
+            noisy_x_test = add_gaussian_noise(x_test, noise_level)
+        elif noise_type == 'salt_and_pepper':
+            noisy_x_test = add_salt_and_pepper_noise(x_test, noise_level)
+        elif noise_type == 'random_erasing':
+            noisy_x_test = random_erasing(x_test, noise_level)
+        else:
+            raise ValueError("Invalid noise type")
         
-        area = X_erased.shape[1] * X_erased.shape[2]
-        target_area = np.random.uniform(sl, sh) * area
-        aspect_ratio = np.random.uniform(r1, r2)
+        predictions = model.predict(noisy_x_test)
+        accuracy = accuracy_score(y_test.argmax(axis=1), predictions.argmax(axis=1))
+        log_loss = categorical_crossentropy(y_test, predictions).numpy().mean()
         
-        h = int(round(np.sqrt(target_area * aspect_ratio)))
-        w = int(round(np.sqrt(target_area / aspect_ratio)))
-        
-        if w < X_erased.shape[2] and h < X_erased.shape[1]:
-            x1 = np.random.randint(0, X_erased.shape[1] - h)
-            y1 = np.random.randint(0, X_erased.shape[2] - w)
-            if X_erased.shape[-1] == 1:  # Grayscale image
-                X_erased[i, x1:x1+h, y1:y1+w, 0] = np.random.rand()
-            else:  # RGB image
-                X_erased[i, x1:x1+h, y1:y1+w, :] = np.random.rand(3)
+        accuracies.append(accuracy)
+        log_losses.append(log_loss)
     
-    return X_erased
+    return accuracies, log_losses
 
-def assess_model_robustness(model, X, y, perturbation_func, **kwargs):
-    X_perturbed = perturbation_func(X, **kwargs)
-    y_pred = model.predict(X_perturbed)
-    loss = log_loss(y, y_pred)
-    accuracy = accuracy_score(y.argmax(axis=1), y_pred.argmax(axis=1))
-    return loss, accuracy
+# Run robustness tests with 5% increments
+noise_levels = np.arange(0, 0.55, 0.05)  # 0% to 50% with 5% increments
+noise_types = ['gaussian', 'salt_and_pepper', 'random_erasing']
 
-def run_robustness_tests(model, X, y):
-    print("Running anomaly robustness tests...")
-    
-    levels = np.linspace(0, 0.5, 11)  # 11 levels from 0 to 0.5
-    
-    results = {
-        'gaussian': {'log_loss': [], 'accuracy': []},
-        'salt_and_pepper': {'log_loss': [], 'accuracy': []},
-        'random_erasing': {'log_loss': [], 'accuracy': []}
-    }
-    
-    for level in levels:
-        print(f"\nTesting noise level: {level:.2f}")
-        
-        # Gaussian noise
-        loss, acc = assess_model_robustness(model, X, y, add_gaussian_noise, std=level)
-        results['gaussian']['log_loss'].append(loss)
-        results['gaussian']['accuracy'].append(acc)
-        print(f"Gaussian noise - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
-        
-        # Salt and pepper noise
-        loss, acc = assess_model_robustness(model, X, y, add_salt_and_pepper_noise, amount=level)
-        results['salt_and_pepper']['log_loss'].append(loss)
-        results['salt_and_pepper']['accuracy'].append(acc)
-        print(f"Salt and pepper noise - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
-        
-        # Random erasing
-        loss, acc = assess_model_robustness(model, X, y, random_erasing, probability=level)
-        results['random_erasing']['log_loss'].append(loss)
-        results['random_erasing']['accuracy'].append(acc)
-        print(f"Random erasing - Log-Loss: {loss:.4f}, Accuracy: {acc:.4f}")
-    
-    return results, levels
+results = {}
 
-def plot_robustness_results(results, levels):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    for noise_type in results:
-        ax1.plot(levels, results[noise_type]['log_loss'], label=noise_type)
-        ax2.plot(levels, results[noise_type]['accuracy'], label=noise_type)
-    
-    ax1.set_xlabel('Noise Level')
-    ax1.set_ylabel('Log-Loss')
-    ax1.set_title('Model Log-Loss vs Noise Level')
-    ax1.legend()
-    ax1.grid(True)
-    
-    ax2.set_xlabel('Noise Level')
-    ax2.set_ylabel('Accuracy')
-    ax2.set_title('Model Accuracy vs Noise Level')
-    ax2.legend()
-    ax2.grid(True)
-    
-    plt.tight_layout()
-    plt.show()
+for noise_type in noise_types:
+    accuracies, log_losses = evaluate_model(baseline_model, x_test, y_test, noise_type, noise_levels)
+    results[noise_type] = {'accuracies': accuracies, 'log_losses': log_losses}
 
-# Run the robustness tests
-results, levels = run_robustness_tests(baseline_model, x_test, y_test)
+# Plot results
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-# Plot the results
-plot_robustness_results(results, levels)
+for noise_type in noise_types:
+    ax1.plot(noise_levels * 100, results[noise_type]['accuracies'], marker='o', label=noise_type)
+ax1.set_xlabel('Noise Level (%)')
+ax1.set_ylabel('Accuracy')
+ax1.set_title('Accuracy vs Noise Level (Baseline Model)')
+ax1.legend()
+ax1.set_xticks(noise_levels * 100)
+ax1.grid(True)
+
+for noise_type in noise_types:
+    ax2.plot(noise_levels * 100, results[noise_type]['log_losses'], marker='o', label=noise_type)
+ax2.set_xlabel('Noise Level (%)')
+ax2.set_ylabel('Log Loss')
+ax2.set_title('Log Loss vs Noise Level (Baseline Model)')
+ax2.legend()
+ax2.set_xticks(noise_levels * 100)
+ax2.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# Print results
+for noise_type in noise_types:
+    print(f"\nResults for {noise_type} noise (Baseline Model):")
+    print("Noise Level | Accuracy | Log Loss")
+    print("------------|----------|----------")
+    for level, acc, loss in zip(noise_levels, results[noise_type]['accuracies'], results[noise_type]['log_losses']):
+        print(f"{level*100:11.1f}% | {acc:.4f}   | {loss:.4f}")
