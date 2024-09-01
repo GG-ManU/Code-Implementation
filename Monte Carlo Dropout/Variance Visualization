@@ -1,0 +1,40 @@
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Assuming mc_predictions is the array of shape (500, 10000, 10) as obtained from your Monte Carlo dropout predictions
+# Let's calculate the variances across the multiple predictions (axis=0 represents the stochastic passes)
+
+# Variances for each test sample and each class
+prediction_variances = mc_predictions.var(axis=0)
+
+# Get the true labels for each test sample
+y_true = y_test.argmax(axis=1)
+
+# Now let's create a variance visualization for each class
+
+# Set up the matplotlib figure
+plt.figure(figsize=(15, 10))
+
+# Loop through each class and plot the variance distribution
+for i in range(num_classes):
+    plt.subplot(2, 5, i + 1)  # Create a subplot for each class (2 rows, 5 columns)
+    sns.histplot(prediction_variances[y_true == i, i], kde=True, color="blue", bins=30)
+    plt.title(f"Class {i} Variance")
+    plt.xlabel("Variance")
+    plt.ylabel("Frequency")
+
+plt.tight_layout()
+plt.show()
+
+# Optionally, if you prefer density plots over histograms:
+plt.figure(figsize=(15, 10))
+for i in range(num_classes):
+    plt.subplot(2, 5, i + 1)  # Create a subplot for each class (2 rows, 5 columns)
+    sns.kdeplot(prediction_variances[y_true == i, i], fill=True, color="blue")
+    plt.title(f"Class {i} Variance")
+    plt.xlabel("Variance")
+    plt.ylabel("Density")
+
+plt.tight_layout()
+plt.show()
