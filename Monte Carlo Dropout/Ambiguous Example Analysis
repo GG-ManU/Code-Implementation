@@ -1,0 +1,19 @@
+# Select an image index 138 160 164
+idx = 160
+
+# Display the image
+plt.imshow(x_test[idx], cmap='viridis')  # Use 'viridis' to match the color scheme in the provided image
+plt.title(f"MNIST Image at Index {idx}")
+plt.colorbar()  # Optional: Adds a color bar to the side
+plt.show()  # Ensure this is called to display the plot
+
+# Posterior probabilities for the selected image
+p0 = mc_predictions[:, idx, :]
+posterior_mean = p0.mean(axis=0).argmax()
+
+print("Posterior mean: {}".format(posterior_mean))
+print("True label: {}".format(y_test[idx].argmax()))
+print()
+# probability + variance
+for i, (prob, var) in enumerate(zip(p0.mean(axis=0), p0.std(axis=0))):
+    print("Class: {}; Proba: {:.1%}; Var: {:.2%}".format(i, prob, var))
