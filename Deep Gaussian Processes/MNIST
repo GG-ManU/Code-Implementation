@@ -1,0 +1,168 @@
+import numpy as np
+import tensorflow as tf
+import pickle
+# Define your model (for example, a simple placeholder)
+x = tf.placeholder(tf.float32, shape=[None, 10])
+y = tf.placeholder(tf.float32, shape=[None, 1])
+W = tf.Variable(tf.random_normal([10, 1]), name="weight")
+b = tf.Variable(tf.zeros([1]), name="bias")
+prediction = tf.add(tf.matmul(x, W), b)
+
+# Define loss and optimizer
+loss = tf.reduce_mean(tf.square(prediction - y))
+optimizer = tf.train.AdamOptimizer().minimize(loss)
+
+# Create a saver object
+saver = tf.train.Saver()
+
+# Create a session and initialize variables
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+
+    # Save the model after training (for example, after an epoch or step)
+    saver.save(sess, "/tmp/model.ckpt")
+    print("Model saved in path: /tmp/model.ckpt")
+
+# Use native TensorFlow distributions
+normal_dist = tf.distributions.Normal(loc=0., scale=1.)
+
+from gpflow.likelihoods import MultiClass
+from gpflow.kernels import RBF, White
+from gpflow.models.svgp import SVGP
+from gpflow.training import AdamOptimizer
+
+from scipy.stats import mode
+from scipy.cluster.vq import kmeans2
+
+from doubly_stochastic_dgp.dgp import DGP
+
+import time
+
+
+def get_mnist_data(data_path='/data'):
+    from tensorflow.examples.tutorials.mnist import input_data
+    mnist = input_data.read_data_sets(data_path + '/MNIST_data/', one_hot=False)
+
+    X, Y = mnist.train.next_batch(mnist.train.num_examples)
+    Xval, Yval = mnist.validation.next_batch(mnist.validation.num_examples)
+    Xtest, Ytest = mnist.test.next_batch(mnist.test.num_examples)
+
+    Y, Yval, Ytest = [np.array(y, dtype=float)[:, None] for y in [Y, Yval, Ytest]]
+
+    X = np.concatenate([X, Xval], 0)
+    Y = np.concatenate([Y, Yval], 0)
+
+    return X.astype(float), Y.astype(float), Xtest.astype(float), Ytest.astype(float)
+
+
+X, Y, Xs, Ys = get_mnist_data()
+
+# We'll use 100 inducing points
+
+# In[ ]:
+
+
+M = 100
+Z = kmeans2(X, M, minit='points')[0]
+
+# We'll compare three models: an ordinary sparse GP and DGPs with 2 and 3 layers.
+#
+# We'll use a batch size of 1000 for all models
+
+# In[ ]:
+
+
+m_sgp = SVGP(X, Y, RBF(784, lengthscales=2., variance=2.), MultiClass(10),
+              Z=Z, num_latent=10, minibatch_size=1000, whiten=True)
+
+
+def make_dgp(L):
+    kernels = [RBF(784, lengthscales=2., variance=2.)]
+    for l in range(L - 1):
+        kernels.append(RBF(30, lengthscales=2., variance=2.))
+    model = DGP(X, Y, Z, kernels, MultiClass(10),
+                minibatch_size=1000,
+                num_outputs=10)
+
+    # start things deterministic
+    for layer in model.layers[:-1]:
+        layer.q_sqrt = layer.q_sqrt.value * 1e-5
+
+    return model
+
+
+m_dgp2 = make_dgp(2)
+
+
+
+def assess_model_sgp(model, X_batch, Y_batch):
+    m, v = model.predict_y(X_batch)
+    l = model.predict_density(X_batch, Y_batch)
+    a = (np.argmax(m, 1).reshape(Y_batch.shape).astype(int)==Y_batch.astype(int))
+    return l, a
+
+
+S = 100
+def assess_model_dgp(model, X_batch, Y_batch):
+    m, v = model.predict_y(X_batch, S)
+    l = model.predict_density(X_batch, Y_batch, S)
+    a = (mode(np.argmax(m, 2), 0)[0].reshape(Y_batch.shape).astype(int)==Y_batch.astype(int))
+    return l, a
+
+
+def batch_assess(model, assess_model, X, Y):
+    n_batches = max(int(len(X)/1000), 1)
+    lik, acc = [], []
+    for X_batch, Y_batch in zip(np.split(X, n_batches), np.split(Y, n_batches)):
+        l, a = assess_model(model, X_batch, Y_batch)
+        lik.append(l)
+        acc.append(a)
+    lik = np.concatenate(lik, 0)
+    acc = np.array(np.concatenate(acc, 0), dtype=float)
+    return np.average(lik), np.average(acc)
+
+
+
+
+iterations = 20000
+
+
+
+AdamOptimizer(0.01).minimize(m_dgp2, maxiter=iterations)
+l, a = batch_assess(m_dgp2, assess_model_dgp, Xs, Ys)
+print('dgp2 test lik: {:.4f}, test acc {:.4f}'.format(l, a))
+
+# Call this function to load the saved history and plot it
+#load_and_plot_dgp_training_history("dgp_training_history.pkl")
+
+
+
+from sklearn.metrics import f1_score, log_loss, roc_auc_score
+
+
+ After run the model and got predictions
+def compute_metrics(model, X_test, Y_test):
+#     Predict class probabilities and labels
+    m, v = model.predict_y(X_test)
+
+    # For F1-Score, we need class predictions (0 or 1, etc.)
+    y_pred_labels = np.argmax(m, axis=1).reshape(Y_test.shape)
+
+    # F1-Score (assuming binary classification; modify for multiclass if needed)
+    f1 = f1_score(Y_test.astype(int), y_pred_labels.astype(int), average='macro')
+
+    # Log Loss
+    logloss = log_loss(Y_test.astype(int), m)
+
+    # AUC-ROC
+    auc = roc_auc_score(Y_test.astype(int), m, multi_class='ovr')  # Adjust for multiclass
+
+    return f1, logloss, auc
+
+
+# Assuming you have already split your data into Xs (test set features) and Ys (test set labels)
+#f1, logloss, auc = compute_metrics(m_sgp, Xs, Ys)
+
+#print(f"F1-Score: {f1:.4f}")
+#print(f"Log Loss: {logloss:.4f}")
+#print(f"AUC-ROC: {auc:.4f}")
